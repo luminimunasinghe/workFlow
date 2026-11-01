@@ -1,0 +1,5 @@
+node_modules
+dist
+.DS_Store
+# Your personal data file. Delete this line if you WANT to commit your data (use a private repo).
+data/lumiflow-data.json
