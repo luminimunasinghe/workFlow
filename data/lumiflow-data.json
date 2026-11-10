@@ -1,0 +1,54 @@
+{
+  "tasks": [
+    {
+      "id": "k4qxpdqa",
+      "title": "user login integration",
+      "project": "",
+      "description": "",
+      "status": "Completed",
+      "priority": "Medium",
+      "category": "Office Work",
+      "due": "2026-11-09",
+      "workToday": "",
+      "nextSteps": "",
+      "blockers": "",
+      "help": "",
+      "completedOn": "2026-11-09"
+    },
+    {
+      "id": "kqls1v12",
+      "title": "setup the askengen",
+      "project": "",
+      "description": "",
+      "status": "Completed",
+      "priority": "Medium",
+      "category": "Office Work",
+      "due": "2026-11-09",
+      "workToday": "",
+      "nextSteps": "",
+      "blockers": "",
+      "help": "",
+      "completedOn": "2026-11-09"
+    }
+  ],
+  "days": {
+    "2026-11-09": {
+      "done": "complete the JF user log in integration ",
+      "next": "Ask engen user control ",
+      "blockers": "had to move to different project with limited time",
+      "learning": "learn to create mongo DB in clusters and connect it to project",
+      "standup": true,
+      "learnMin": 2,
+      "checks": [
+        "1",
+        "2",
+        "3"
+      ]
+    }
+  },
+  "blockers": [],
+  "notes": [],
+  "prs": [],
+  "plan": [],
+  "ratings": {}
+}

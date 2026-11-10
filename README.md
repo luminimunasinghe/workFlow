@@ -9,9 +9,11 @@ PR checklists and your 3-month development plan.
 3. `npm run dev`  → open the http://localhost:5173 link
 
 ## Where data is saved
-- While `npm run dev` runs, everything is saved to **data/lumiflow-data.json** (one plain JSON file).
-- It is also kept in the browser as a backup. Use *Backup & data* to export/import JSON.
-- `data/lumiflow-data.json` is in `.gitignore` (it holds personal performance info). Remove that line to commit it to a PRIVATE repo.
+- There is no database configured. While `npm run dev` runs, the Vite development server saves data to **data/lumiflow-data.json** (a plain JSON file in this project folder). The browser also keeps a copy in its local storage.
+- Use *Backup & data* to export/import JSON. The Daily update page's **Save** button saves immediately; edits are also auto-saved.
+- `data/lumiflow-data.json` is included in Git, so collaborators can see the data snapshot after you commit and push it; they will see that snapshot when they pull or clone the repo and run the app.
+- This is file sharing through Git, not live shared storage. Each person's edits stay on their machine until they commit and push; others then pull. If multiple people edit at the same time, Git may report a merge conflict. A shared database with access controls is needed for live multi-user updates.
+- Anyone with repository access can read committed data. Only commit information you are allowed to share, and remember that deleting it later does not erase it from Git history.
 
 ## Upload to Git
 ```

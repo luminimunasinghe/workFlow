@@ -183,12 +183,15 @@ function Dashboard({ db, update, sel, go }: P & { go: (p: Page) => void }) {
 }
 
 /* ================= Daily ================= */
-function Daily({ db, update, sel }: P) {
+function Daily({ db, update, sel, saveNow }: P & { saveNow: () => Promise<boolean> }) {
   const day = db.days[sel] ?? emptyDay();
   const set = (p: Partial<Day>) => update((d) => ({ ...d, days: { ...d.days, [sel]: { ...(d.days[sel] ?? emptyDay()), ...p } } }));
   const list = db.tasks.filter((t) => t.due === sel || t.completedOn === sel);
-  const [q, setQ] = useState(""); const [copied, setCopied] = useState(false);
-  const copy = () => { navigator.clipboard?.writeText(`Today's Update (${sel})\nDone: ${day.done}\nNext: ${day.next}\nBlockers: ${day.blockers}\nLearning: ${day.learning}`).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }, () => undefined); };
+  const [q, setQ] = useState(""); const [saveStatus, setSaveStatus] = useState("");
+  const save = async () => {
+    setSaveStatus("Saving…");
+    setSaveStatus(await saveNow() ? "Saved ✓" : "Save failed");
+  };
   return (
     <div className="space-y-5">
       <Title sub="Pick any date at the top to fill in or fix that day. Everything saves as you type.">{long(sel)}</Title>
@@ -207,7 +210,8 @@ function Daily({ db, update, sel }: P) {
             <Txt label="Next: what will I work on next?" value={day.next} onChange={(v) => set({ next: v })} rows={3} />
             <Txt label="Blockers: what is stopping me? (include the date first noticed)" value={day.blockers} onChange={(v) => set({ blockers: v })} />
             <Txt label="Learning: what did I learn?" value={day.learning} onChange={(v) => set({ learning: v })} /></div>
-          <button className={ghost + " mt-4"} onClick={copy}>{copied ? "Copied ✓" : "Copy update to share"}</button></Card>
+          <button className={primary + " mt-4"} onClick={save}>{saveStatus === "Saving…" ? "Saving…" : "Save"}</button>
+          {saveStatus && <span className={`ml-3 text-sm ${saveStatus === "Save failed" ? "text-rose-600" : "text-emerald-700"}`} role="status">{saveStatus}</span>}</Card>
       </div>
       <Card><H sub="Tasks due on or completed on this date">Tasks for this day</H>
         <form className="mb-3 flex gap-2" onSubmit={(e) => { e.preventDefault(); if (q.trim()) { update((d) => ({ ...d, tasks: [{ ...blankTask(sel), title: q.trim() }, ...d.tasks] })); setQ(""); } }}>
@@ -533,6 +537,17 @@ export default function App() {
   const [sel, setSel] = useState(today());
   const [menu, setMenu] = useState(false);
   const [mode, setMode] = useState("browser");
+  const saveNow = async () => {
+    if (!db) return false;
+    let browserSaved = false;
+    try { localStorage.setItem(KEY, JSON.stringify(db)); browserSaved = true; } catch { /* storage unavailable */ }
+    try {
+      const response = await fetch("/api/data", { method: "POST", body: JSON.stringify(db, null, 2) });
+      if (response.ok) { setMode("file"); return true; }
+    } catch { /* no local file server */ }
+    setMode("browser");
+    return browserSaved;
+  };
   useEffect(() => {
     (async () => {
       let d: DB | null = null;
@@ -570,7 +585,7 @@ export default function App() {
           {sel !== today() && <span className="text-xs font-medium text-amber-600">Viewing {sel < today() ? "a past" : "a future"} date</span>}
         </header>
         <div className="mx-auto max-w-6xl p-4 sm:p-8">
-          {page === "dashboard" && <Dashboard {...common} go={go} />}{page === "daily" && <Daily {...common} />}{page === "calendar" && <CalendarView db={db} sel={sel} setSel={setSel} />}{page === "tasks" && <Tasks {...common} />}
+          {page === "dashboard" && <Dashboard {...common} go={go} />}{page === "daily" && <Daily {...common} saveNow={saveNow} />}{page === "calendar" && <CalendarView db={db} sel={sel} setSel={setSel} />}{page === "tasks" && <Tasks {...common} />}
           {page === "blockers" && <Blockers {...common} />}{page === "notes" && <Notes {...common} />}{page === "prs" && <PRs {...common} />}
           {page === "plan" && <Plan {...common} />}{page === "review" && <Review {...common} />}{page === "data" && <Data db={db} setDb={setDb} mode={mode} />}
         </div>
