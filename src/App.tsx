@@ -5,12 +5,12 @@ type Status = "Not Started" | "In Progress" | "Blocked" | "Completed";
 type Priority = "High" | "Medium" | "Low";
 type Category = "Office Work" | "Learning" | "Personal" | "Other";
 interface Task { id: string; title: string; project: string; description: string; status: Status; priority: Priority; category: Category;
-  due: string; workToday: string; nextSteps: string; blockers: string; help: string; completedOn?: string; sample?: boolean }
-interface Day { done: string; next: string; blockers: string; learning: string; standup: boolean; learnMin: number; checks: string[]; sample?: boolean }
+  due: string; workToday: string; nextSteps: string; blockers: string; help: string; completedOn?: string }
+interface Day { done: string; next: string; blockers: string; learning: string; standup: boolean; learnMin: number; checks: string[] }
 interface Blocker { id: string; issue: string; impact: string; tried: string; help: string; identified: string; raised: string;
-  status: "Open" | "Raised" | "Resolved"; followup: boolean; sample?: boolean }
-interface Note { id: string; date: string; type: string; v: Record<string, string>; sample?: boolean }
-interface PR { id: string; date: string; title: string; checks: string[]; ai: string; applied: boolean; signed: boolean; sample?: boolean }
+  status: "Open" | "Raised" | "Resolved"; followup: boolean }
+interface Note { id: string; date: string; type: string; v: Record<string, string> }
+interface PR { id: string; date: string; title: string; checks: string[]; ai: string; applied: boolean; signed: boolean }
 interface DB { tasks: Task[]; days: Record<string, Day>; blockers: Blocker[]; notes: Note[]; prs: PR[]; plan: string[]; ratings: Record<string, number> }
 type Upd = (f: (d: DB) => DB) => void;
 interface P { db: DB; update: Upd; sel: string }
@@ -73,20 +73,16 @@ const emptyDay = (): Day => ({ done: "", next: "", blockers: "", learning: "", s
 const blankTask = (due: string): Task => ({ id: uid(), title: "", project: "", description: "", status: "Not Started", priority: "Medium", category: "Office Work",
   due, workToday: "", nextSteps: "", blockers: "", help: "" });
 const emptyDB = (): DB => ({ tasks: [], days: {}, blockers: [], notes: [], prs: [], plan: [], ratings: {} });
-
-function sampleData(): DB {
-  const t = today(); const y = shift(t, -1);
-  const k = (o: Partial<Task>): Task => ({ ...blankTask(t), sample: true, ...o });
+const isSample = (x: unknown) => !!x && typeof x === "object" && "sample" in x && !!(x as { sample?: boolean }).sample;
+function dropSamples(raw: Partial<DB> | null | undefined): DB {
+  const base = { ...emptyDB(), ...raw };
   return {
-    ...emptyDB(),
-    tasks: [k({ title: "Fix pagination bug", project: "RMS", priority: "High", status: "In Progress", workToday: "Reproduced the bug", nextSteps: "Fix API offset logic" }),
-      k({ title: "Write unit tests for booking service", project: "RMS", category: "Learning", due: shift(t, 2) }),
-      k({ title: "Update PR checklist", project: "Team", priority: "Low", due: y, status: "Blocked", blockers: "Waiting for reviewer", help: "Review from tech lead" }),
-      k({ title: "Trace one feature UI → API → DB", category: "Learning", status: "Completed", completedOn: y, due: y })],
-    days: { [y]: { ...emptyDay(), done: "Investigated the RMS bug", next: "Fix and test", blockers: "None", learning: "How API pagination works", standup: true, learnMin: 20, checks: ["0", "2", "5"], sample: true } },
-    blockers: [{ id: uid(), issue: "Staging DB not reachable", impact: "Cannot test the fix", tried: "Restarted VPN, checked credentials", help: "Infra team access", identified: y, raised: t, status: "Raised", followup: false, sample: true }],
-    notes: [{ id: uid(), date: y, type: "Learning note", v: { "What I learned": "API pagination (offset vs cursor)", "Where I applied it": "RMS bug", "What's next": "Indexing basics" }, sample: true }],
-    prs: [{ id: uid(), date: y, title: "RMS: fix pagination", checks: PRC.slice(0, 6).map((_, i) => String(i)), ai: "Copilot for test cases; verified by running the full suite", applied: true, signed: false, sample: true }],
+    ...base,
+    tasks: (base.tasks ?? []).filter((x) => !isSample(x)),
+    blockers: (base.blockers ?? []).filter((x) => !isSample(x)),
+    notes: (base.notes ?? []).filter((x) => !isSample(x)),
+    prs: (base.prs ?? []).filter((x) => !isSample(x)),
+    days: Object.fromEntries(Object.entries(base.days ?? {}).filter(([, v]) => !isSample(v))),
   };
 }
 function measures(db: DB) {
@@ -381,26 +377,145 @@ function Review({ db, sel }: P) {
   );
 }
 
+/* ================= Calendar (view only) ================= */
+function recordsOn(db: DB, date: string) {
+  const day = db.days[date];
+  const tasks = db.tasks.filter((t) => t.due === date || t.completedOn === date);
+  const blockers = db.blockers.filter((b) => b.identified === date || b.raised === date);
+  const notes = db.notes.filter((n) => n.date === date);
+  const prs = db.prs.filter((p) => p.date === date);
+  const written = !!(day && (day.done.trim() || day.next.trim() || day.blockers.trim() || day.learning.trim() || day.checks.length || day.standup || day.learnMin));
+  return { day, tasks, blockers, notes, prs, count: (written ? 1 : 0) + tasks.length + blockers.length + notes.length + prs.length };
+}
+function monthCells(ym: string) {
+  const [y, m] = ym.split("-").map(Number);
+  const pad = (new Date(y, m - 1, 1).getDay() + 6) % 7;
+  const cells: (string | null)[] = Array.from({ length: pad }, () => null);
+  for (let d = 1; d <= new Date(y, m, 0).getDate(); d++) cells.push(`${y}-${p2(m)}-${p2(d)}`);
+  while (cells.length % 7) cells.push(null);
+  return cells;
+}
+const Line = ({ k, v }: { k: string; v?: string }) => (v?.trim() ? <p className="text-sm"><b className="text-slate-500">{k}:</b> <span className="whitespace-pre-wrap">{v}</span></p> : null);
+function CalendarView({ db, sel, setSel }: { db: DB; sel: string; setSel: (s: string) => void }) {
+  const [ym, setYm] = useState(sel.slice(0, 7));
+  useEffect(() => setYm(sel.slice(0, 7)), [sel]);
+  const shiftMonth = (n: number) => {
+    const [y, m] = ym.split("-").map(Number);
+    const d = new Date(y, m - 1 + n, 1);
+    setYm(`${d.getFullYear()}-${p2(d.getMonth() + 1)}`);
+  };
+  const cells = monthCells(ym);
+  const monthDates = cells.filter((d): d is string => !!d);
+  const logged = monthDates.filter((d) => recordsOn(db, d).count > 0).length;
+  const complete = monthDates.filter((d) => { const day = db.days[d]; return !!(day?.done.trim() && day.next.trim()); }).length;
+  const rec = recordsOn(db, sel);
+  const day = rec.day ?? emptyDay();
+  const reqs: [string, boolean][] = [
+    ["Work completed is written", !!day.done.trim()],
+    ["Next steps are written", !!day.next.trim()],
+    ["Blockers are noted", !!(day.blockers.trim() || rec.blockers.length)],
+    ["Learning is noted", !!(day.learning.trim() || rec.notes.some((n) => n.type === "Learning note"))],
+    ["Stand-up update given", day.standup],
+    ["At least 15 minutes of learning logged", day.learnMin >= 15],
+    ["Daily checklist complete", day.checks.length >= DAILY.length],
+  ];
+  const met = reqs.filter(([, ok]) => ok).length;
+  return (
+    <div className="space-y-5">
+      <Title sub="View only. Colored dates already have saved records. Click a date to open everything entered that day.">Calendar</Title>
+      <div className="grid grid-cols-3 gap-4">
+        {[["Days with records", logged], ["Days with a full update", complete], ["Requirements on this date", `${met}/${reqs.length}`]].map(([l, v]) =>
+          <Card key={l}><p className="text-xs font-semibold text-slate-500">{l}</p><p className="mt-1 text-2xl font-extrabold text-indigo-600">{v}</p></Card>)}
+      </div>
+      <Card>
+        <div className="mb-4 flex items-center justify-between gap-2">
+          <button className={ghost} onClick={() => shiftMonth(-1)} aria-label="Previous month">‹</button>
+          <h2 className="text-base font-bold text-slate-900">{parse(ym + "-01").toLocaleDateString(undefined, { month: "long", year: "numeric" })}</h2>
+          <button className={ghost} onClick={() => shiftMonth(1)} aria-label="Next month">›</button>
+        </div>
+        <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-semibold text-slate-400">{["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => <div key={d} className="py-1">{d}</div>)}</div>
+        <div className="grid grid-cols-7 gap-1">
+          {cells.map((d, i) => {
+            if (!d) return <div key={i} />;
+            const r = recordsOn(db, d);
+            const full = !!(r.day?.done.trim() && r.day.next.trim());
+            const bg = !r.count ? "bg-white text-slate-700 hover:bg-slate-50" : full ? "bg-emerald-100 text-emerald-900 hover:bg-emerald-200" : "bg-amber-100 text-amber-900 hover:bg-amber-200";
+            return (
+              <button key={d} onClick={() => setSel(d)} className={`flex min-h-14 flex-col items-center rounded-xl border px-1 py-1.5 text-sm transition ${bg} ${d === sel ? "border-indigo-500 ring-2 ring-indigo-400" : "border-transparent"} ${d === today() ? "font-extrabold" : ""}`}>
+                {parse(d).getDate()}
+                <span className="mt-1 flex h-1.5 gap-0.5">
+                  {r.tasks.length > 0 && <i className="h-1.5 w-1.5 rounded-full bg-sky-500" />}
+                  {r.notes.length > 0 && <i className="h-1.5 w-1.5 rounded-full bg-indigo-500" />}
+                  {r.blockers.length > 0 && <i className="h-1.5 w-1.5 rounded-full bg-rose-500" />}
+                  {r.prs.length > 0 && <i className="h-1.5 w-1.5 rounded-full bg-violet-500" />}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+          <span className="inline-flex items-center gap-1.5"><i className="h-3 w-3 rounded bg-emerald-200" /> Full daily update</span>
+          <span className="inline-flex items-center gap-1.5"><i className="h-3 w-3 rounded bg-amber-200" /> Some records</span>
+          <span className="inline-flex items-center gap-1.5"><i className="h-1.5 w-1.5 rounded-full bg-sky-500" /> Task</span>
+          <span className="inline-flex items-center gap-1.5"><i className="h-1.5 w-1.5 rounded-full bg-indigo-500" /> Note</span>
+          <span className="inline-flex items-center gap-1.5"><i className="h-1.5 w-1.5 rounded-full bg-rose-500" /> Blocker</span>
+          <span className="inline-flex items-center gap-1.5"><i className="h-1.5 w-1.5 rounded-full bg-violet-500" /> PR</span>
+        </div>
+      </Card>
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <div><h2 className="text-lg font-extrabold text-slate-900">{long(sel)}</h2><p className="text-xs text-slate-500">Saved records for this date. Nothing here can be edited.</p></div>
+        <Badge text={met === reqs.length ? "All requirements met" : `${met} of ${reqs.length} requirements met`} cls={met === reqs.length ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"} />
+      </div>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card><H sub="From the daily routine in your development plan">Requirements</H>
+          <Bar value={(met / reqs.length) * 100} color={met === reqs.length ? "bg-emerald-500" : "bg-amber-400"} />
+          <div className="mt-3">{reqs.map(([l, ok]) => <p key={l} className="flex items-start gap-2 py-1 text-sm"><span className={ok ? "text-emerald-600" : "text-slate-300"}>{ok ? "✓" : "○"}</span><span className={ok ? "" : "text-slate-500"}>{l}</span></p>)}</div></Card>
+        <Card><H>Written update</H>
+          {day.done || day.next || day.blockers || day.learning ? <div className="space-y-1.5">
+            <Line k="Done" v={day.done} /><Line k="Next" v={day.next} /><Line k="Blockers" v={day.blockers} /><Line k="Learning" v={day.learning} />
+            <p className="text-sm text-slate-500">Learning time: <b className="text-slate-700">{day.learnMin} min</b> · Stand-up: <b className="text-slate-700">{day.standup ? "Given" : "Not marked"}</b></p>
+          </div> : <Empty text="No written update on this date." />}</Card>
+        <Card><H sub={`${day.checks.length} of ${DAILY.length}`}>Daily checklist</H>
+          {DAILY.map((l, i) => <p key={l} className="flex items-start gap-2 py-1 text-sm"><span className={day.checks.includes(String(i)) ? "text-emerald-600" : "text-slate-300"}>{day.checks.includes(String(i)) ? "✓" : "○"}</span><span className={day.checks.includes(String(i)) ? "" : "text-slate-500"}>{l}</span></p>)}</Card>
+        <Card><H>Tasks</H>
+          {rec.tasks.length === 0 ? <Empty text="No tasks due or completed on this date." /> : <div className="space-y-3">{rec.tasks.map((t) => (
+            <div key={t.id} className="rounded-xl bg-slate-50 p-3 text-sm"><div className="flex flex-wrap items-center gap-1.5"><p className="font-semibold">{t.title}</p><Badge text={t.status} /><Badge text={t.priority} />{t.project && <Badge text={t.project} cls="bg-indigo-50 text-indigo-700" />}</div>
+              <div className="mt-1.5 space-y-0.5 text-slate-600"><Line k="Description" v={t.description} /><Line k="Done" v={t.workToday} /><Line k="Next" v={t.nextSteps} /><Line k="Blocker" v={t.blockers} /><Line k="Help" v={t.help} /></div></div>))}</div>}</Card>
+        <Card className="lg:col-span-2"><H>Notes & templates</H>
+          {rec.notes.length === 0 ? <Empty text="No notes on this date." /> : <div className="grid gap-3 sm:grid-cols-2">{rec.notes.map((n) => (
+            <div key={n.id} className="rounded-xl bg-slate-50 p-3"><Badge text={n.type} cls="bg-indigo-50 text-indigo-700" />
+              <div className="mt-2 space-y-1">{(TPL[n.type] ?? Object.keys(n.v)).map((f) => <Line key={f} k={f} v={n.v[f]} />)}</div></div>))}</div>}</Card>
+        <Card><H>Blockers</H>
+          {rec.blockers.length === 0 ? <Empty text="No blockers on this date." /> : <div className="space-y-3">{rec.blockers.map((b) => (
+            <div key={b.id} className="rounded-xl bg-slate-50 p-3 text-sm"><div className="flex flex-wrap items-center gap-1.5"><p className="font-semibold">{b.issue}</p><Badge text={b.status} /></div>
+              <div className="mt-1.5 space-y-0.5"><Line k="Impact" v={b.impact} /><Line k="Tried" v={b.tried} /><Line k="Help" v={b.help} />
+                <p className="text-xs text-slate-400">Identified {nice(b.identified)}{b.raised ? ` · raised ${nice(b.raised)}` : ""}</p></div></div>))}</div>}</Card>
+        <Card><H>PR & handover</H>
+          {rec.prs.length === 0 ? <Empty text="No PRs on this date." /> : <div className="space-y-3">{rec.prs.map((p) => (
+            <div key={p.id} className="rounded-xl bg-slate-50 p-3 text-sm"><div className="flex flex-wrap items-center gap-1.5"><p className="font-semibold">{p.title}</p>
+              <Badge text={`${p.checks.length}/${PRC.length} checklist`} cls={p.checks.length === PRC.length ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"} /></div>
+              <ul className="mt-2 space-y-0.5">{PRC.map((l, i) => <li key={l} className="text-xs"><span className={p.checks.includes(String(i)) ? "text-emerald-600" : "text-slate-300"}>{p.checks.includes(String(i)) ? "✓" : "○"}</span> <span className={p.checks.includes(String(i)) ? "" : "text-slate-500"}>{l}</span></li>)}</ul>
+              {p.ai && <p className="mt-1.5 text-xs text-slate-600"><b>AI:</b> {p.ai}</p>}</div>))}</div>}</Card>
+      </div>
+    </div>
+  );
+}
+
 /* ================= Data ================= */
-function Data({ db, update, setDb, mode }: { db: DB; update: Upd; setDb: (d: DB) => void; mode: string }) {
+function Data({ db, setDb, mode }: { db: DB; setDb: (d: DB) => void; mode: string }) {
   const file = useRef<HTMLInputElement>(null); const [msg, setMsg] = useState("");
-  const rows = (): { sample?: boolean }[] => [...db.tasks, ...Object.values(db.days), ...db.blockers, ...db.notes, ...db.prs];
   const exportJson = () => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(db, null, 2)], { type: "application/json" })); a.download = `lumiflow-backup-${today()}.json`; a.click(); setMsg("Backup downloaded."); };
   const importJson = async (f?: File) => {
     if (!f) return;
-    try { const d = JSON.parse(await f.text()); if (!Array.isArray(d.tasks)) throw new Error(); if (confirm("Replace your current data with this file?")) { setDb({ ...emptyDB(), ...d }); setMsg("Data imported."); } }
+    try { const d = JSON.parse(await f.text()); if (!Array.isArray(d.tasks)) throw new Error(); if (confirm("Replace your current data with this file?")) { setDb(dropSamples(d)); setMsg("Data imported."); } }
     catch { setMsg("That file isn't a valid LumiFlow backup."); }
     if (file.current) file.current.value = "";
   };
-  const clean = <T extends { sample?: boolean }>(a: T[]) => a.filter((x) => !x.sample);
   return (
     <div className="space-y-5"><Title>Your data</Title>
       <Card><H sub={mode === "file" ? "Auto-saved to data/lumiflow-data.json in the project folder." : "Auto-saved in this browser. Run npm run dev to also save to a JSON file."}>Where your data lives</H>
         <div className="flex flex-wrap gap-2"><button className={primary} onClick={exportJson}>Export JSON</button><button className={ghost} onClick={() => file.current?.click()}>Import JSON</button>
           <input ref={file} type="file" accept="application/json" hidden onChange={(e) => importJson(e.target.files?.[0])} /></div>{msg && <p className="mt-3 text-sm text-emerald-700">{msg}</p>}</Card>
-      <Card><H sub="Sample items help you explore. Remove them when you're ready.">Sample data</H>
-        <button disabled={!rows().some((x) => x.sample)} className={ghost + " disabled:opacity-40"} onClick={() => update((d) => ({ ...d, tasks: clean(d.tasks), blockers: clean(d.blockers), notes: clean(d.notes), prs: clean(d.prs),
-          days: Object.fromEntries(Object.entries(d.days).filter(([, v]) => !v.sample)) }))}>{rows().some((x) => x.sample) ? "Remove sample data" : "No sample data left"}</button></Card>
       <Card><H sub="Permanently clears everything. Export a backup first.">Reset</H>
         <button className={btn + "bg-rose-600 text-white hover:bg-rose-700"} onClick={() => confirm("Delete ALL data?") && setDb(emptyDB())}>Delete all data</button></Card>
     </div>
@@ -408,8 +523,8 @@ function Data({ db, update, setDb, mode }: { db: DB; update: Upd; setDb: (d: DB)
 }
 
 /* ================= App shell ================= */
-type Page = "dashboard" | "daily" | "tasks" | "blockers" | "notes" | "prs" | "plan" | "review" | "data";
-const NAV: [Page, string, string][] = [["dashboard", "Dashboard", "🏠"], ["daily", "Daily update", "📓"], ["tasks", "Tasks & projects", "✅"], ["blockers", "Blockers", "🚧"],
+type Page = "dashboard" | "daily" | "calendar" | "tasks" | "blockers" | "notes" | "prs" | "plan" | "review" | "data";
+const NAV: [Page, string, string][] = [["dashboard", "Dashboard", "🏠"], ["daily", "Daily update", "📓"], ["calendar", "Calendar", "📅"], ["tasks", "Tasks & projects", "✅"], ["blockers", "Blockers", "🚧"],
   ["notes", "Notes & templates", "📝"], ["prs", "PR checklist", "🔀"], ["plan", "Development plan", "🌱"], ["review", "Weekly review", "📊"], ["data", "Backup & data", "💾"]];
 
 export default function App() {
@@ -423,7 +538,7 @@ export default function App() {
       let d: DB | null = null;
       try { const j = await (await fetch("/api/data")).json(); if (j && Array.isArray(j.tasks)) { d = j; setMode("file"); } } catch { /* no file server */ }
       if (!d) { try { const raw = localStorage.getItem(KEY); if (raw) d = JSON.parse(raw); } catch { /* ignore */ } }
-      setDb({ ...emptyDB(), ...(d ?? sampleData()) });
+      setDb(dropSamples(d));
     })();
   }, []);
   useEffect(() => {
@@ -455,9 +570,9 @@ export default function App() {
           {sel !== today() && <span className="text-xs font-medium text-amber-600">Viewing {sel < today() ? "a past" : "a future"} date</span>}
         </header>
         <div className="mx-auto max-w-6xl p-4 sm:p-8">
-          {page === "dashboard" && <Dashboard {...common} go={go} />}{page === "daily" && <Daily {...common} />}{page === "tasks" && <Tasks {...common} />}
+          {page === "dashboard" && <Dashboard {...common} go={go} />}{page === "daily" && <Daily {...common} />}{page === "calendar" && <CalendarView db={db} sel={sel} setSel={setSel} />}{page === "tasks" && <Tasks {...common} />}
           {page === "blockers" && <Blockers {...common} />}{page === "notes" && <Notes {...common} />}{page === "prs" && <PRs {...common} />}
-          {page === "plan" && <Plan {...common} />}{page === "review" && <Review {...common} />}{page === "data" && <Data db={db} update={update} setDb={setDb} mode={mode} />}
+          {page === "plan" && <Plan {...common} />}{page === "review" && <Review {...common} />}{page === "data" && <Data db={db} setDb={setDb} mode={mode} />}
         </div>
       </main>
     </div>
