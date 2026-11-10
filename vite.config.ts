@@ -18,7 +18,9 @@ function dataFile(): Plugin {
             try {
               JSON.parse(body);
               fs.mkdirSync(path.dirname(file), { recursive: true });
-              fs.writeFileSync(file, body);
+              if (!fs.existsSync(file) || fs.readFileSync(file, "utf8") !== body) {
+                fs.writeFileSync(file, body);
+              }
               res.end("ok");
             } catch {
               res.statusCode = 400;
@@ -33,4 +35,7 @@ function dataFile(): Plugin {
     },
   };
 }
-export default defineConfig({ plugins: [react(), tailwindcss(), dataFile()] });
+export default defineConfig({
+  plugins: [react(), tailwindcss(), dataFile()],
+  server: { watch: { ignored: ["**/data/lumiflow-data.json"] } },
+});

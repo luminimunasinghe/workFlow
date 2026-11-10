@@ -46,7 +46,20 @@
       ]
     }
   },
-  "blockers": [],
+  "blockers": [
+    {
+      "id": "daily-2026-11-09",
+      "sourceDay": "2026-11-09",
+      "issue": "had to move to different project with limited time",
+      "impact": "",
+      "tried": "",
+      "help": "",
+      "identified": "2026-11-09",
+      "raised": "",
+      "status": "Open",
+      "followup": false
+    }
+  ],
   "notes": [],
   "prs": [],
   "plan": [],

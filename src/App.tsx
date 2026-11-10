@@ -8,7 +8,7 @@ interface Task { id: string; title: string; project: string; description: string
   due: string; workToday: string; nextSteps: string; blockers: string; help: string; completedOn?: string }
 interface Day { done: string; next: string; blockers: string; learning: string; standup: boolean; learnMin: number; checks: string[] }
 interface Blocker { id: string; issue: string; impact: string; tried: string; help: string; identified: string; raised: string;
-  status: "Open" | "Raised" | "Resolved"; followup: boolean }
+  status: "Open" | "Raised" | "Resolved"; followup: boolean; sourceDay?: string }
 interface Note { id: string; date: string; type: string; v: Record<string, string> }
 interface PR { id: string; date: string; title: string; checks: string[]; ai: string; applied: boolean; signed: boolean }
 interface DB { tasks: Task[]; days: Record<string, Day>; blockers: Blocker[]; notes: Note[]; prs: PR[]; plan: string[]; ratings: Record<string, number> }
@@ -76,10 +76,18 @@ const emptyDB = (): DB => ({ tasks: [], days: {}, blockers: [], notes: [], prs: 
 const isSample = (x: unknown) => !!x && typeof x === "object" && "sample" in x && !!(x as { sample?: boolean }).sample;
 function dropSamples(raw: Partial<DB> | null | undefined): DB {
   const base = { ...emptyDB(), ...raw };
+  const blockers = (base.blockers ?? []).filter((x) => !isSample(x));
+  Object.entries(base.days ?? {}).forEach(([date, day]) => {
+    const issue = day.blockers.trim();
+    if (!issue) return;
+    const linked = blockers.find((b) => b.sourceDay === date);
+    if (linked) linked.issue = issue;
+    else blockers.push({ id: `daily-${date}`, sourceDay: date, issue, impact: "", tried: "", help: "", identified: date, raised: "", status: "Open", followup: false });
+  });
   return {
     ...base,
     tasks: (base.tasks ?? []).filter((x) => !isSample(x)),
-    blockers: (base.blockers ?? []).filter((x) => !isSample(x)),
+    blockers,
     notes: (base.notes ?? []).filter((x) => !isSample(x)),
     prs: (base.prs ?? []).filter((x) => !isSample(x)),
     days: Object.fromEntries(Object.entries(base.days ?? {}).filter(([, v]) => !isSample(v))),
@@ -183,42 +191,82 @@ function Dashboard({ db, update, sel, go }: P & { go: (p: Page) => void }) {
 }
 
 /* ================= Daily ================= */
-function Daily({ db, update, sel, saveNow }: P & { saveNow: () => Promise<boolean> }) {
+function Daily({ db, update, sel, saveNow, go }: P & { saveNow: () => Promise<boolean>; go: (p: Page) => void }) {
   const day = db.days[sel] ?? emptyDay();
-  const set = (p: Partial<Day>) => update((d) => ({ ...d, days: { ...d.days, [sel]: { ...(d.days[sel] ?? emptyDay()), ...p } } }));
+  const set = (p: Partial<Day>) => update((d) => {
+    const nextDay = { ...(d.days[sel] ?? emptyDay()), ...p };
+    let blockers = d.blockers;
+    if (Object.prototype.hasOwnProperty.call(p, "blockers")) {
+      const issue = nextDay.blockers.trim();
+      const linked = blockers.find((b) => b.sourceDay === sel);
+      blockers = issue
+        ? linked
+          ? blockers.map((b) => b.sourceDay === sel ? { ...b, issue } : b)
+          : [{ id: `daily-${sel}`, sourceDay: sel, issue, impact: "", tried: "", help: "", identified: sel, raised: "", status: "Open", followup: false }, ...blockers]
+        : blockers.filter((b) => b.sourceDay !== sel);
+    }
+    return { ...d, days: { ...d.days, [sel]: nextDay }, blockers };
+  });
   const list = db.tasks.filter((t) => t.due === sel || t.completedOn === sel);
+  const dayBlockers = db.blockers.filter((b) => b.sourceDay === sel || (!b.sourceDay && b.identified === sel));
   const [q, setQ] = useState(""); const [saveStatus, setSaveStatus] = useState("");
+  const [project, setProject] = useState("");
   const save = async () => {
     setSaveStatus("Saving…");
     setSaveStatus(await saveNow() ? "Saved ✓" : "Save failed");
   };
+  const completed = list.filter(isDone).length;
   return (
     <div className="space-y-5">
-      <Title sub="Pick any date at the top to fill in or fix that day. Everything saves as you type.">{long(sel)}</Title>
-      <div className="grid gap-5 lg:grid-cols-5">
-        <div className="space-y-5 lg:col-span-2">
-          <Card><H>Daily checklist</H>{DAILY.map((l, i) => <Check key={i} label={l} on={day.checks.includes(String(i))}
-            onChange={(v) => set({ checks: v ? [...day.checks, String(i)] : day.checks.filter((c) => c !== String(i)) })} />)}
-            <p className="mt-2 text-xs text-slate-400">{day.checks.length} of {DAILY.length} done</p></Card>
-          <Card><H sub="15–20 minutes a day is enough">Habits</H>
-            <Check label="I gave my stand-up update without being asked" on={day.standup} onChange={(v) => set({ standup: v })} strike={false} />
-            <Field label="Minutes spent learning"><input type="number" min={0} max={600} className={inp + " !w-28"} value={day.learnMin} onChange={(e) => set({ learnMin: Math.max(0, +e.target.value || 0) })} /></Field></Card>
+      <section className="relative overflow-hidden rounded-[28px] bg-gradient-to-br from-slate-950 via-indigo-950 to-indigo-800 p-6 text-white shadow-xl shadow-indigo-950/10 sm:p-8">
+        <div className="pointer-events-none absolute -right-14 -top-20 h-64 w-64 rounded-full bg-indigo-400/20 blur-3xl" />
+        <div className="relative flex flex-wrap items-start justify-between gap-5">
+          <div><p className="text-xs font-bold uppercase tracking-[0.2em] text-indigo-200">Daily workspace</p><h1 className="mt-2 text-2xl font-extrabold tracking-tight sm:text-3xl">{long(sel)}</h1>
+            <p className="mt-2 max-w-xl text-sm text-indigo-100/80">A clear snapshot of today’s work, priorities, and anything in the way.</p></div>
+          <div className="flex items-center gap-3"><button className="rounded-xl bg-white px-4 py-2.5 text-sm font-bold text-indigo-900 shadow-sm transition hover:bg-indigo-50 disabled:opacity-60" onClick={save} disabled={saveStatus === "Saving…"}>
+            {saveStatus === "Saving…" ? "Saving…" : "Save update"}</button>
+            {saveStatus && <span className={`text-xs font-semibold ${saveStatus === "Save failed" ? "text-rose-200" : "text-emerald-200"}`} role="status">{saveStatus}</span>}</div>
         </div>
-        <Card className="lg:col-span-3"><H sub="Done · Next · Blockers · Learning">Written update</H>
-          <div className="space-y-3">
-            <Txt label="Done: what did I complete?" value={day.done} onChange={(v) => set({ done: v })} rows={3} />
-            <Txt label="Next: what will I work on next?" value={day.next} onChange={(v) => set({ next: v })} rows={3} />
-            <Txt label="Blockers: what is stopping me? (include the date first noticed)" value={day.blockers} onChange={(v) => set({ blockers: v })} />
-            <Txt label="Learning: what did I learn?" value={day.learning} onChange={(v) => set({ learning: v })} /></div>
-          <button className={primary + " mt-4"} onClick={save}>{saveStatus === "Saving…" ? "Saving…" : "Save"}</button>
-          {saveStatus && <span className={`ml-3 text-sm ${saveStatus === "Save failed" ? "text-rose-600" : "text-emerald-700"}`} role="status">{saveStatus}</span>}</Card>
+        <div className="relative mt-7 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {[["Tasks today", list.length], ["Completed", completed], ["Open blockers", dayBlockers.filter((b) => b.status !== "Resolved").length], ["Learning", `${day.learnMin} min`]].map(([label, value]) =>
+            <div key={label} className="rounded-2xl border border-white/10 bg-white/[0.08] px-4 py-3 backdrop-blur"><p className="text-[11px] font-semibold uppercase tracking-wide text-indigo-100/70">{label}</p><p className="mt-1 text-xl font-bold">{value}</p></div>)}
+        </div>
+      </section>
+      <div className="grid gap-5 lg:grid-cols-[0.85fr_1.15fr]">
+        <div className="space-y-5">
+          <Card className="!p-5 sm:!p-6"><div className="mb-4 flex items-start justify-between gap-3"><H sub="A few small checks keep the day on track">Daily checklist</H><Badge text={`${day.checks.length}/${DAILY.length}`} cls="bg-indigo-50 text-indigo-700" /></div>
+            <div className="mb-3 h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-indigo-500 transition-all" style={{ width: `${(day.checks.length / DAILY.length) * 100}%` }} /></div>
+            {DAILY.map((l, i) => <Check key={i} label={l} on={day.checks.includes(String(i))}
+              onChange={(v) => set({ checks: v ? [...day.checks, String(i)] : day.checks.filter((c) => c !== String(i)) })} />)}</Card>
+          <Card className="!p-5 sm:!p-6"><H sub="Small habits add up over time">Daily habits</H>
+            <Check label="I gave my stand-up update" on={day.standup} onChange={(v) => set({ standup: v })} strike={false} />
+            <div className="mt-4 flex items-center justify-between gap-3 rounded-xl bg-slate-50 p-3"><div><p className="text-sm font-semibold text-slate-700">Learning time</p><p className="text-xs text-slate-500">Minutes spent learning today</p></div>
+              <div className="flex items-center gap-2"><input aria-label="Minutes spent learning" type="number" min={0} max={600} className={inp + " !w-20 text-center"} value={day.learnMin} onChange={(e) => set({ learnMin: Math.max(0, +e.target.value || 0) })} /><span className="text-xs text-slate-500">min</span></div></div></Card>
+        </div>
+        <Card className="!p-5 sm:!p-6"><H sub="Your notes are saved to this date and shared across the tracker">Written update</H>
+          <div className="space-y-4">
+            <Txt label="Done · What did I complete?" value={day.done} onChange={(v) => set({ done: v })} rows={3} />
+            <Txt label="Next · What will I work on next?" value={day.next} onChange={(v) => set({ next: v })} rows={3} />
+            <Txt label="Blockers · What is stopping me?" value={day.blockers} onChange={(v) => set({ blockers: v })} />
+            <p className="-mt-2 text-xs text-slate-500">Daily blockers are automatically added to the Blocker tracker. Add impact, what you tried, and the help you need there.</p>
+            <Txt label="Learning · What did I learn?" value={day.learning} onChange={(v) => set({ learning: v })} />
+          </div>
+          {dayBlockers.length > 0 && <div className="mt-5 rounded-2xl border border-rose-100 bg-rose-50/70 p-4"><div className="mb-2 flex items-center justify-between gap-2"><p className="text-sm font-bold text-slate-800">Blockers logged for this day</p>
+              <button className="text-xs font-semibold text-indigo-700 hover:text-indigo-900" onClick={() => go("blockers")}>Manage blockers →</button></div>
+            <div className="space-y-2">{dayBlockers.map((b) => <div key={b.id} className="flex items-start justify-between gap-3 rounded-xl bg-white/80 px-3 py-2.5"><p className="min-w-0 whitespace-pre-wrap text-sm text-slate-700">{b.issue}</p><Badge text={b.status} /></div>)}</div>
+          </div>}
+        </Card>
       </div>
-      <Card><H sub="Tasks due on or completed on this date">Tasks for this day</H>
-        <form className="mb-3 flex gap-2" onSubmit={(e) => { e.preventDefault(); if (q.trim()) { update((d) => ({ ...d, tasks: [{ ...blankTask(sel), title: q.trim() }, ...d.tasks] })); setQ(""); } }}>
-          <input className={inp} placeholder="Add a task for this date and press Enter" value={q} onChange={(e) => setQ(e.target.value)} /><button className={ghost}>Add</button></form>
-        {list.length === 0 ? <Empty text="No tasks on this date." /> : <ul className="divide-y divide-slate-100">{list.map((t) => (
-          <li key={t.id} className="flex items-center gap-3 py-2"><input type="checkbox" className="h-4 w-4 accent-indigo-600" checked={isDone(t)} onChange={() => update((d) => ({ ...d, tasks: upsert(d.tasks, flip(t, sel)) }))} />
-            <span className={`flex-1 text-sm ${isDone(t) ? "text-slate-400 line-through" : ""}`}>{t.title}</span><Badge text={t.status} /></li>))}</ul>}</Card>
+      <Card className="!p-5 sm:!p-6"><div className="mb-4 flex flex-wrap items-start justify-between gap-3"><H sub="The same task records appear in Tasks & project work">Tasks for this day</H>
+          <button className="text-sm font-semibold text-indigo-700 hover:text-indigo-900" onClick={() => go("tasks")}>Open task workspace →</button></div>
+        <form className="mb-4 grid gap-2 sm:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_auto]" onSubmit={(e) => { e.preventDefault(); if (q.trim()) { update((d) => ({ ...d, tasks: [{ ...blankTask(sel), title: q.trim(), project: project.trim() }, ...d.tasks] })); setQ(""); setProject(""); } }}>
+          <input className={inp} placeholder="Task name" aria-label="Task name" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input className={inp} placeholder="Project (optional)" aria-label="Project" value={project} onChange={(e) => setProject(e.target.value)} />
+          <button className={primary}>Add task</button></form>
+        {list.length === 0 ? <Empty text="No tasks due or completed on this date. Add one above to share it with your task workspace." /> : <ul className="divide-y divide-slate-100">{list.map((t) => (
+          <li key={t.id} className="flex items-center gap-3 py-3"><input type="checkbox" className="h-4 w-4 accent-indigo-600" checked={isDone(t)} onChange={() => update((d) => ({ ...d, tasks: upsert(d.tasks, flip(t, sel)) }))} />
+            <div className="min-w-0 flex-1"><p className={`text-sm font-semibold ${isDone(t) ? "text-slate-400 line-through" : "text-slate-800"}`}>{t.title}</p>{t.project && <p className="mt-0.5 text-xs text-slate-500">{t.project}</p>}</div><Badge text={t.status} /></li>))}</ul>}
+      </Card>
     </div>
   );
 }
@@ -264,6 +312,18 @@ function Blockers({ db, update, sel }: P) {
   const [edit, setEdit] = useState<Blocker | null>(null);
   const blank = (): Blocker => ({ id: uid(), issue: "", impact: "", tried: "", help: "", identified: sel, raised: "", status: "Open", followup: false });
   const set = <K extends keyof Blocker>(k: K, v: Blocker[K]) => setEdit((x) => (x ? { ...x, [k]: v } : x));
+  const save = (blocker: Blocker) => update((d) => {
+    const blockers = upsert(d.blockers, blocker);
+    if (!blocker.sourceDay) return { ...d, blockers };
+    const day = d.days[blocker.sourceDay] ?? emptyDay();
+    return { ...d, blockers, days: { ...d.days, [blocker.sourceDay]: { ...day, blockers: blocker.issue } } };
+  });
+  const remove = (blocker: Blocker) => update((d) => {
+    const days = blocker.sourceDay && d.days[blocker.sourceDay]
+      ? { ...d.days, [blocker.sourceDay]: { ...d.days[blocker.sourceDay], blockers: "" } }
+      : d.days;
+    return { ...d, days, blockers: del(d.blockers, blocker.id) };
+  });
   const list = [...db.blockers].sort((a, b) => Number(a.status === "Resolved") - Number(b.status === "Resolved") || b.identified.localeCompare(a.identified));
   const lag = (b: Blocker) => (b.raised ? Math.round((parse(b.raised).getTime() - parse(b.identified).getTime()) / 864e5) : null);
   return (
@@ -274,8 +334,8 @@ function Blockers({ db, update, sel }: P) {
           <div className="flex flex-wrap items-center gap-2"><p className="text-sm font-semibold">{b.issue}</p><Badge text={b.status} />{b.followup && <Badge text="Needed a follow-up" cls="bg-amber-50 text-amber-700" />}</div>
           <p className="mt-1 text-xs text-slate-400">Identified {nice(b.identified)}{lag(b) !== null && ` · raised ${lag(b)} day(s) later`}</p>
           <div className="mt-2 space-y-0.5 text-xs text-slate-500">{b.impact && <p><b>Impact:</b> {b.impact}</p>}{b.tried && <p><b>Tried:</b> {b.tried}</p>}{b.help && <p><b>Help needed:</b> {b.help}</p>}</div></div>
-          <Actions what="blocker" onEdit={() => setEdit(b)} onDel={() => update((d) => ({ ...d, blockers: del(d.blockers, b.id) }))} /></div></Card>))}</div>}
-      {edit && <FormModal title="Blocker" onClose={() => setEdit(null)} onSubmit={() => { update((d) => ({ ...d, blockers: upsert(d.blockers, edit) })); setEdit(null); }}>
+            <Actions what="blocker" onEdit={() => setEdit(b)} onDel={() => remove(b)} /></div></Card>))}</div>}
+          {edit && <FormModal title="Blocker" onClose={() => setEdit(null)} onSubmit={() => { save(edit); setEdit(null); }}>
         <Inp label="The issue *" req wide value={edit.issue} onChange={(v) => set("issue", v)} /><Txt label="Impact" value={edit.impact} onChange={(v) => set("impact", v)} />
         <Txt label="What I already tried" value={edit.tried} onChange={(v) => set("tried", v)} /><Txt label="Help needed" value={edit.help} onChange={(v) => set("help", v)} />
         <Inp label="Date identified" type="date" value={edit.identified} onChange={(v) => set("identified", v)} /><Inp label="Date raised with the team" type="date" value={edit.raised} onChange={(v) => set("raised", v)} />
@@ -585,7 +645,7 @@ export default function App() {
           {sel !== today() && <span className="text-xs font-medium text-amber-600">Viewing {sel < today() ? "a past" : "a future"} date</span>}
         </header>
         <div className="mx-auto max-w-6xl p-4 sm:p-8">
-          {page === "dashboard" && <Dashboard {...common} go={go} />}{page === "daily" && <Daily {...common} saveNow={saveNow} />}{page === "calendar" && <CalendarView db={db} sel={sel} setSel={setSel} />}{page === "tasks" && <Tasks {...common} />}
+          {page === "dashboard" && <Dashboard {...common} go={go} />}{page === "daily" && <Daily {...common} saveNow={saveNow} go={go} />}{page === "calendar" && <CalendarView db={db} sel={sel} setSel={setSel} />}{page === "tasks" && <Tasks {...common} />}
           {page === "blockers" && <Blockers {...common} />}{page === "notes" && <Notes {...common} />}{page === "prs" && <PRs {...common} />}
           {page === "plan" && <Plan {...common} />}{page === "review" && <Review {...common} />}{page === "data" && <Data db={db} setDb={setDb} mode={mode} />}
         </div>
